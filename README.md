@@ -16,6 +16,8 @@ OpsDoctor is designed for quick one-shot diagnostics, simple periodic server hea
 - Go web dashboard as one standalone binary.
 - Valid JSON output without `jq`.
 - Standalone HTML reports with embedded CSS.
+- Automatic language detection with installer-time language selection.
+- Localized dashboard and report labels for major world languages.
 - Linux-only checks for system, network, security, services, packages, Docker, and nginx.
 - Graceful degradation when optional commands are missing.
 - Unified check result format: `id`, `category`, `title`, `status`, `message`, `fix`.
@@ -37,12 +39,30 @@ The installer places the CLI at:
 /usr/local/bin/opsdoctor
 ```
 
+During installation OpsDoctor can keep `auto` language detection or write a preferred language to `/etc/opsdoctor/opsdoctor.conf`:
+
+```bash
+sudo ./install.sh --lang ru
+sudo ./install.sh --auto-lang
+./install.sh --list-languages
+```
+
+Installers check required and recommended dependencies before copying files. On Debian/Ubuntu they can install missing packages automatically with `apt-get`:
+
+```bash
+./install.sh --check-deps
+sudo ./install.sh --install-deps
+sudo ./install.sh --skip-deps
+```
+
 Try:
 
 ```bash
 opsdoctor check
 opsdoctor check --json
 opsdoctor check --html report.html
+opsdoctor check --lang ru
+opsdoctor languages
 ```
 
 ## One-Shot CLI Usage
@@ -77,12 +97,101 @@ Write a standalone HTML report:
 opsdoctor check --html report.html
 ```
 
+Override language for one run:
+
+```bash
+opsdoctor check --lang ru
+OPSDOCTOR_LANG=de opsdoctor check
+```
+
 Print version and help:
 
 ```bash
 opsdoctor version
 opsdoctor help
+opsdoctor languages
 ```
+
+## Language Support
+
+OpsDoctor detects language in this order:
+
+1. CLI flag or environment variable: `--lang LANG`, `OPSDOCTOR_LANG`, or `OPSDOCTOR_WEB_LANG`.
+2. `/etc/opsdoctor/opsdoctor.conf`.
+3. System locale from `LC_ALL`, `LC_MESSAGES`, or `LANG`.
+4. English fallback.
+
+Supported language codes:
+
+```text
+en ru es zh hi ar pt fr de ja ko it tr pl uk id vi fa bn ur nl cs sv ro
+```
+
+Installers list languages already installed as system locales first, then the remaining supported languages:
+
+```bash
+sudo ./install.sh
+sudo ./install-agent.sh --lang ru
+sudo ./install-web.sh --lang auto
+```
+
+The CLI JSON report includes stable machine-readable fields plus localized labels:
+
+```json
+{
+  "language": "ru",
+  "checks": [
+    {
+      "category": "Security",
+      "category_label": "Безопасность",
+      "title": "SSH root login",
+      "title_label": "Root-доступ по SSH",
+      "status": "critical",
+      "status_label": "КРИТИЧНО"
+    }
+  ]
+}
+```
+
+## Dependency Checks
+
+OpsDoctor keeps runtime dependencies small. The Bash CLI works with common Debian/Ubuntu base utilities and degrades individual checks to `skipped` or `warning` when optional diagnostic tools are missing.
+
+Installer dependency modes:
+
+```bash
+./install.sh --check-deps
+./install-agent.sh --check-deps
+./install-web.sh --check-deps
+
+sudo ./install.sh --install-deps
+sudo ./install-agent.sh --install-deps
+sudo ./install-web.sh --install-deps
+
+sudo ./install.sh --skip-deps
+```
+
+The default installer behavior is `--install-deps`: missing required and recommended OpsDoctor packages are installed automatically when `apt-get` is available.
+
+Core packages checked by the installers include:
+
+```text
+bash coreutils grep sed mawk findutils libc-bin hostname iproute2 iputils-ping procps
+```
+
+Agent installation additionally requires systemd:
+
+```text
+systemd
+```
+
+Web dashboard installation additionally requires Go for building the single binary:
+
+```text
+golang-go
+```
+
+OpsDoctor does not automatically install monitored services such as nginx, Docker, ufw, firewalld, or fail2ban. Those are inspected if present and reported as skipped or warning when absent, depending on the check.
 
 ## Agent Installation
 
@@ -158,6 +267,7 @@ Endpoints:
 {
   "tool": "OpsDoctor",
   "version": "0.1.0",
+  "language": "en",
   "timestamp": "2026-05-07T17:00:00+05:00",
   "host": {
     "hostname": "server01",
@@ -175,8 +285,11 @@ Endpoints:
     {
       "id": "ssh_root_login",
       "category": "Security",
+      "category_label": "Security",
       "title": "SSH root login",
+      "title_label": "SSH root login",
       "status": "critical",
+      "status_label": "CRITICAL",
       "message": "PermitRootLogin is enabled",
       "fix": "Set PermitRootLogin no in /etc/ssh/sshd_config and restart ssh"
     }

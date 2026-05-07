@@ -22,11 +22,30 @@ server_ip() {
 }
 
 main() {
-  require_root
   local dir tmp_bin ip
   dir="$(project_dir)"
+  # shellcheck disable=SC1091
+  . "$dir/lib/opsdoctor-install-deps.sh"
+  # shellcheck disable=SC1091
+  . "$dir/lib/opsdoctor-install-i18n.sh"
+  parse_dependency_args "$@"
+  parse_language_args "$@"
+  if [ "$INSTALL_LIST_LANGUAGES" -eq 1 ]; then
+    configure_language
+  fi
+  if [ "$OPSDOCTOR_CHECK_DEPS_ONLY" -eq 1 ]; then
+    print_dependency_report web
+    exit 0
+  fi
 
-  "$dir/install-agent.sh"
+  require_root
+  ensure_dependencies web
+
+  if [ -n "$INSTALL_LANG_REQUESTED" ]; then
+    "$dir/install-agent.sh" --skip-deps --lang "$INSTALL_LANG_REQUESTED"
+  else
+    "$dir/install-agent.sh" --skip-deps
+  fi
 
   if ! command -v go >/dev/null 2>&1; then
     printf '\nGo is not installed, so the web dashboard binary was not built.\n' >&2

@@ -3,10 +3,15 @@ set -u
 
 OPSDOCTOR_VERSION="0.1.0"
 OPSDOCTOR_NAME="OpsDoctor"
+OPSDOCTOR_CONFIG_FILE="${OPSDOCTOR_CONFIG_FILE:-/etc/opsdoctor/opsdoctor.conf}"
+SUPPORTED_LANGUAGES="en ru es zh hi ar pt fr de ja ko it tr pl uk id vi fa bn ur nl cs sv ro"
+INSTALLED_LANG_CACHE=""
 
 USE_COLOR=1
 OUTPUT_MODE="terminal"
 HTML_OUTPUT_FILE=""
+LANG_REQUESTED="${OPSDOCTOR_LANG:-auto}"
+LANG_CODE="en"
 
 REPORT_TIMESTAMP=""
 HOST_HOSTNAME=""
@@ -25,6 +30,9 @@ CHECK_TITLES=()
 CHECK_STATUSES=()
 CHECK_MESSAGES=()
 CHECK_FIXES=()
+CHECK_CATEGORY_LABELS=()
+CHECK_TITLE_LABELS=()
+CHECK_STATUS_LABELS=()
 
 COLOR_RESET=""
 COLOR_BOLD=""
@@ -34,28 +42,415 @@ COLOR_CRITICAL=""
 COLOR_SKIPPED=""
 COLOR_DIM=""
 
-usage() {
-  cat <<'EOF'
-OpsDoctor - lightweight Linux diagnostics toolkit
+lang_name() {
+  case "$1" in
+    en) printf 'English' ;;
+    ru) printf 'Русский' ;;
+    es) printf 'Español' ;;
+    zh) printf '中文' ;;
+    hi) printf 'हिन्दी' ;;
+    ar) printf 'العربية' ;;
+    pt) printf 'Português' ;;
+    fr) printf 'Français' ;;
+    de) printf 'Deutsch' ;;
+    ja) printf '日本語' ;;
+    ko) printf '한국어' ;;
+    it) printf 'Italiano' ;;
+    tr) printf 'Türkçe' ;;
+    pl) printf 'Polski' ;;
+    uk) printf 'Українська' ;;
+    id) printf 'Bahasa Indonesia' ;;
+    vi) printf 'Tiếng Việt' ;;
+    fa) printf 'فارسی' ;;
+    bn) printf 'বাংলা' ;;
+    ur) printf 'اردو' ;;
+    nl) printf 'Nederlands' ;;
+    cs) printf 'Čeština' ;;
+    sv) printf 'Svenska' ;;
+    ro) printf 'Română' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
-Usage:
-  opsdoctor check [--json] [--html FILE] [--no-color]
+is_supported_lang() {
+  case " $SUPPORTED_LANGUAGES " in
+    *" $1 "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+normalize_lang() {
+  local raw="${1:-}"
+  raw="${raw%%.*}"
+  raw="${raw%%@*}"
+  raw="${raw//-/_}"
+  raw="${raw%%_*}"
+  raw="${raw,,}"
+  case "$raw" in
+    cn|zh) printf 'zh' ;;
+    iw|he) printf 'en' ;;
+    in) printf 'id' ;;
+    *) printf '%s' "$raw" ;;
+  esac
+}
+
+config_language() {
+  local line key value
+  [ -r "$OPSDOCTOR_CONFIG_FILE" ] || return 1
+  while IFS='=' read -r key value; do
+    key="$(trim "$key")"
+    value="$(trim "${value:-}")"
+    value="${value%\"}"
+    value="${value#\"}"
+    value="${value%\'}"
+    value="${value#\'}"
+    if [ "$key" = "OPSDOCTOR_LANG" ]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done < "$OPSDOCTOR_CONFIG_FILE"
+  return 1
+}
+
+system_language() {
+  local candidate
+  for candidate in "${LC_ALL:-}" "${LC_MESSAGES:-}" "${LANG:-}"; do
+    candidate="$(normalize_lang "$candidate")"
+    if is_supported_lang "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  printf 'en'
+}
+
+resolve_language() {
+  local requested="${1:-auto}"
+  local candidate
+  requested="$(normalize_lang "$requested")"
+
+  if [ -n "$requested" ] && [ "$requested" != "auto" ]; then
+    if is_supported_lang "$requested"; then
+      printf '%s' "$requested"
+    else
+      printf 'en'
+    fi
+    return 0
+  fi
+
+  candidate="$(config_language 2>/dev/null || true)"
+  candidate="$(normalize_lang "$candidate")"
+  if [ -n "$candidate" ] && [ "$candidate" != "auto" ] && is_supported_lang "$candidate"; then
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  system_language
+}
+
+init_language() {
+  LANG_CODE="$(resolve_language "$LANG_REQUESTED")"
+}
+
+language_is_installed() {
+  local code="$1"
+  load_installed_languages
+  case " $INSTALLED_LANG_CACHE " in
+    *" $code "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+load_installed_languages() {
+  local locale_name code
+  [ -n "$INSTALLED_LANG_CACHE" ] && return 0
+  if ! command_exists locale; then
+    INSTALLED_LANG_CACHE="none"
+    return 0
+  fi
+  if command_exists awk; then
+    while IFS= read -r code; do
+      code="$(normalize_lang "$code")"
+      if is_supported_lang "$code"; then
+        case " $INSTALLED_LANG_CACHE " in
+          *" $code "*) ;;
+          *) INSTALLED_LANG_CACHE="$INSTALLED_LANG_CACHE $code" ;;
+        esac
+      fi
+    done < <(locale -a 2>/dev/null | awk -F'[_.@-]' '{print tolower($1)}')
+    [ -n "$INSTALLED_LANG_CACHE" ] || INSTALLED_LANG_CACHE="none"
+    return 0
+  fi
+  while IFS= read -r locale_name; do
+    code="$(normalize_lang "$locale_name")"
+    if is_supported_lang "$code"; then
+      case " $INSTALLED_LANG_CACHE " in
+        *" $code "*) ;;
+        *) INSTALLED_LANG_CACHE="$INSTALLED_LANG_CACHE $code" ;;
+      esac
+    fi
+  done < <(locale -a 2>/dev/null)
+  [ -n "$INSTALLED_LANG_CACHE" ] || INSTALLED_LANG_CACHE="none"
+}
+
+t_en() {
+  case "$1" in
+    usage_title) printf 'lightweight Linux diagnostics toolkit' ;;
+    usage_usage) printf 'Usage' ;;
+    usage_commands) printf 'Commands' ;;
+    usage_options) printf 'Options' ;;
+    usage_examples) printf 'Examples' ;;
+    cmd_check) printf 'Run one-shot Linux diagnostics (default command)' ;;
+    cmd_version) printf 'Print OpsDoctor version' ;;
+    cmd_help) printf 'Show this help' ;;
+    cmd_languages) printf 'Show supported languages and system locales' ;;
+    opt_json) printf 'Print a valid JSON report to stdout' ;;
+    opt_html) printf 'Write a standalone HTML report to FILE' ;;
+    opt_no_color) printf 'Disable colored terminal output' ;;
+    opt_lang) printf 'Use language LANG (auto, en, ru, es, zh, hi, ar, pt, fr, de, ja, ko, it, tr, pl, uk, id, vi, fa, bn, ur, nl, cs, sv, ro)' ;;
+    lang_title) printf 'Supported languages' ;;
+    lang_current) printf 'Current language' ;;
+    lang_system) printf 'System language' ;;
+    lang_installed) printf 'installed' ;;
+    lang_not_installed) printf 'not installed' ;;
+    host) printf 'Host' ;;
+    os) printf 'OS' ;;
+    kernel) printf 'Kernel' ;;
+    timestamp) printf 'Timestamp' ;;
+    summary) printf 'Summary' ;;
+    score) printf 'Score' ;;
+    out_of_100) printf 'out of 100' ;;
+    ok) printf 'OK' ;;
+    warning) printf 'WARNING' ;;
+    critical) printf 'CRITICAL' ;;
+    skipped) printf 'SKIPPED' ;;
+    warnings) printf 'Warnings' ;;
+    criticals) printf 'Critical' ;;
+    checks) printf 'Checks' ;;
+    category) printf 'Category' ;;
+    status) printf 'Status' ;;
+    check) printf 'Check' ;;
+    message) printf 'Message' ;;
+    fix) printf 'Suggested fix' ;;
+    suggested_fixes) printf 'Suggested fixes' ;;
+    no_immediate_fixes) printf 'No immediate fixes' ;;
+    all_checks_ok_or_skipped) printf 'All checks are OK or skipped.' ;;
+    generated_at) printf 'Generated at' ;;
+    html_written) printf 'HTML report written to' ;;
+    invalid_status_message) printf 'Invalid check status returned' ;;
+    report_bug_fix) printf 'Report this as an OpsDoctor bug.' ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
+t_ru() {
+  case "$1" in
+    usage_title) printf 'лёгкий инструмент диагностики Linux' ;;
+    usage_usage) printf 'Использование' ;;
+    usage_commands) printf 'Команды' ;;
+    usage_options) printf 'Опции' ;;
+    usage_examples) printf 'Примеры' ;;
+    cmd_check) printf 'Запустить одноразовую диагностику Linux (команда по умолчанию)' ;;
+    cmd_version) printf 'Показать версию OpsDoctor' ;;
+    cmd_help) printf 'Показать эту справку' ;;
+    cmd_languages) printf 'Показать поддерживаемые языки и локали системы' ;;
+    opt_json) printf 'Вывести валидный JSON-отчёт в stdout' ;;
+    opt_html) printf 'Записать автономный HTML-отчёт в FILE' ;;
+    opt_no_color) printf 'Отключить цветной вывод в терминале' ;;
+    opt_lang) printf 'Использовать язык LANG (auto, en, ru, es, zh, hi, ar, pt, fr, de, ja, ko, it, tr, pl, uk, id, vi, fa, bn, ur, nl, cs, sv, ro)' ;;
+    lang_title) printf 'Поддерживаемые языки' ;;
+    lang_current) printf 'Текущий язык' ;;
+    lang_system) printf 'Язык системы' ;;
+    lang_installed) printf 'установлен' ;;
+    lang_not_installed) printf 'не установлен' ;;
+    host) printf 'Хост' ;;
+    os) printf 'ОС' ;;
+    kernel) printf 'Ядро' ;;
+    timestamp) printf 'Время' ;;
+    summary) printf 'Итог' ;;
+    score) printf 'Оценка' ;;
+    out_of_100) printf 'из 100' ;;
+    ok) printf 'OK' ;;
+    warning) printf 'ВНИМАНИЕ' ;;
+    critical) printf 'КРИТИЧНО' ;;
+    skipped) printf 'ПРОПУЩЕНО' ;;
+    warnings) printf 'Предупреждения' ;;
+    criticals) printf 'Критично' ;;
+    checks) printf 'Проверки' ;;
+    category) printf 'Раздел' ;;
+    status) printf 'Статус' ;;
+    check) printf 'Проверка' ;;
+    message) printf 'Сообщение' ;;
+    fix) printf 'Рекомендация' ;;
+    suggested_fixes) printf 'Рекомендации' ;;
+    no_immediate_fixes) printf 'Нет срочных исправлений' ;;
+    all_checks_ok_or_skipped) printf 'Все проверки в статусе OK или пропущены.' ;;
+    generated_at) printf 'Сформировано' ;;
+    html_written) printf 'HTML-отчёт записан в' ;;
+    invalid_status_message) printf 'Проверка вернула некорректный статус' ;;
+    report_bug_fix) printf 'Сообщите об этом как об ошибке OpsDoctor.' ;;
+    *) t_en "$1" ;;
+  esac
+}
+
+t_generic() {
+  case "$1" in
+    ok) printf 'OK' ;;
+    warning)
+      case "$LANG_CODE" in
+        es) printf 'ADVERTENCIA' ;; zh) printf '警告' ;; hi) printf 'चेतावनी' ;; ar) printf 'تحذير' ;; pt) printf 'AVISO' ;; fr) printf 'AVERTISSEMENT' ;; de) printf 'WARNUNG' ;; ja) printf '警告' ;; ko) printf '경고' ;; it) printf 'AVVISO' ;; tr) printf 'UYARI' ;; pl) printf 'OSTRZEŻENIE' ;; uk) printf 'УВАГА' ;; id) printf 'PERINGATAN' ;; vi) printf 'CẢNH BÁO' ;; fa) printf 'هشدار' ;; bn) printf 'সতর্কতা' ;; ur) printf 'انتباہ' ;; nl) printf 'WAARSCHUWING' ;; cs) printf 'VAROVÁNÍ' ;; sv) printf 'VARNING' ;; ro) printf 'AVERTISMENT' ;; *) t_en "$1" ;; esac ;;
+    critical)
+      case "$LANG_CODE" in
+        es) printf 'CRÍTICO' ;; zh) printf '严重' ;; hi) printf 'गंभीर' ;; ar) printf 'حرج' ;; pt) printf 'CRÍTICO' ;; fr) printf 'CRITIQUE' ;; de) printf 'KRITISCH' ;; ja) printf '重大' ;; ko) printf '치명적' ;; it) printf 'CRITICO' ;; tr) printf 'KRİTİK' ;; pl) printf 'KRYTYCZNE' ;; uk) printf 'КРИТИЧНО' ;; id) printf 'KRITIS' ;; vi) printf 'NGHIÊM TRỌNG' ;; fa) printf 'بحرانی' ;; bn) printf 'গুরুতর' ;; ur) printf 'سنگین' ;; nl) printf 'KRITIEK' ;; cs) printf 'KRITICKÉ' ;; sv) printf 'KRITISKT' ;; ro) printf 'CRITIC' ;; *) t_en "$1" ;; esac ;;
+    skipped)
+      case "$LANG_CODE" in
+        es) printf 'OMITIDO' ;; zh) printf '已跳过' ;; hi) printf 'छोड़ा गया' ;; ar) printf 'تم التخطي' ;; pt) printf 'IGNORADO' ;; fr) printf 'IGNORÉ' ;; de) printf 'ÜBERSPRUNGEN' ;; ja) printf 'スキップ' ;; ko) printf '건너뜀' ;; it) printf 'SALTATO' ;; tr) printf 'ATLANDI' ;; pl) printf 'POMINIĘTE' ;; uk) printf 'ПРОПУЩЕНО' ;; id) printf 'DILEWATI' ;; vi) printf 'BỎ QUA' ;; fa) printf 'رد شد' ;; bn) printf 'এড়ানো হয়েছে' ;; ur) printf 'چھوڑا گیا' ;; nl) printf 'OVERGESLAGEN' ;; cs) printf 'PŘESKOČENO' ;; sv) printf 'HOPPAD' ;; ro) printf 'OMIS' ;; *) t_en "$1" ;; esac ;;
+    summary)
+      case "$LANG_CODE" in
+        es) printf 'Resumen' ;; zh) printf '摘要' ;; hi) printf 'सारांश' ;; ar) printf 'الملخص' ;; pt) printf 'Resumo' ;; fr) printf 'Résumé' ;; de) printf 'Zusammenfassung' ;; ja) printf '概要' ;; ko) printf '요약' ;; it) printf 'Riepilogo' ;; tr) printf 'Özet' ;; pl) printf 'Podsumowanie' ;; uk) printf 'Підсумок' ;; id) printf 'Ringkasan' ;; vi) printf 'Tóm tắt' ;; fa) printf 'خلاصه' ;; bn) printf 'সারাংশ' ;; ur) printf 'خلاصہ' ;; nl) printf 'Samenvatting' ;; cs) printf 'Souhrn' ;; sv) printf 'Sammanfattning' ;; ro) printf 'Rezumat' ;; *) t_en "$1" ;; esac ;;
+    score)
+      case "$LANG_CODE" in
+        es) printf 'Puntuación' ;; zh) printf '评分' ;; hi) printf 'स्कोर' ;; ar) printf 'النتيجة' ;; pt) printf 'Pontuação' ;; fr) printf 'Score' ;; de) printf 'Bewertung' ;; ja) printf 'スコア' ;; ko) printf '점수' ;; it) printf 'Punteggio' ;; tr) printf 'Puan' ;; pl) printf 'Wynik' ;; uk) printf 'Оцінка' ;; id) printf 'Skor' ;; vi) printf 'Điểm' ;; fa) printf 'امتیاز' ;; bn) printf 'স্কোর' ;; ur) printf 'اسکور' ;; nl) printf 'Score' ;; cs) printf 'Skóre' ;; sv) printf 'Poäng' ;; ro) printf 'Scor' ;; *) t_en "$1" ;; esac ;;
+    checks)
+      case "$LANG_CODE" in
+        es) printf 'Comprobaciones' ;; zh) printf '检查' ;; hi) printf 'जांच' ;; ar) printf 'الفحوصات' ;; pt) printf 'Verificações' ;; fr) printf 'Contrôles' ;; de) printf 'Prüfungen' ;; ja) printf 'チェック' ;; ko) printf '검사' ;; it) printf 'Controlli' ;; tr) printf 'Kontroller' ;; pl) printf 'Sprawdzenia' ;; uk) printf 'Перевірки' ;; id) printf 'Pemeriksaan' ;; vi) printf 'Kiểm tra' ;; fa) printf 'بررسی‌ها' ;; bn) printf 'পরীক্ষা' ;; ur) printf 'جانچیں' ;; nl) printf 'Controles' ;; cs) printf 'Kontroly' ;; sv) printf 'Kontroller' ;; ro) printf 'Verificări' ;; *) t_en "$1" ;; esac ;;
+    suggested_fixes|fix)
+      case "$LANG_CODE" in
+        es) printf 'Correcciones sugeridas' ;; zh) printf '建议修复' ;; hi) printf 'सुझाए गए सुधार' ;; ar) printf 'الإصلاحات المقترحة' ;; pt) printf 'Correções sugeridas' ;; fr) printf 'Correctifs suggérés' ;; de) printf 'Empfohlene Korrekturen' ;; ja) printf '推奨修正' ;; ko) printf '권장 수정' ;; it) printf 'Correzioni suggerite' ;; tr) printf 'Önerilen düzeltmeler' ;; pl) printf 'Sugerowane poprawki' ;; uk) printf 'Рекомендації' ;; id) printf 'Perbaikan yang disarankan' ;; vi) printf 'Cách khắc phục đề xuất' ;; fa) printf 'راهکارهای پیشنهادی' ;; bn) printf 'প্রস্তাবিত সমাধান' ;; ur) printf 'تجویز کردہ اصلاحات' ;; nl) printf 'Voorgestelde oplossingen' ;; cs) printf 'Doporučené opravy' ;; sv) printf 'Föreslagna åtgärder' ;; ro) printf 'Remedieri sugerate' ;; *) t_en "$1" ;; esac ;;
+    *) t_en "$1" ;;
+  esac
+}
+
+t() {
+  case "$LANG_CODE" in
+    ru) t_ru "$1" ;;
+    en) t_en "$1" ;;
+    *) t_generic "$1" ;;
+  esac
+}
+
+category_label() {
+  local category="$1"
+  if [ "$LANG_CODE" = "ru" ]; then
+    case "$category" in
+      System) printf 'Система' ;;
+      Network) printf 'Сеть' ;;
+      Security) printf 'Безопасность' ;;
+      Services) printf 'Сервисы' ;;
+      Packages) printf 'Пакеты' ;;
+      Docker) printf 'Docker' ;;
+      Nginx) printf 'Nginx' ;;
+      *) printf '%s' "$category" ;;
+    esac
+  else
+    printf '%s' "$category"
+  fi
+}
+
+title_label() {
+  local title="$1"
+  if [ "$LANG_CODE" = "ru" ]; then
+    case "$title" in
+      "Hostname") printf 'Имя хоста' ;;
+      "Operating system") printf 'Операционная система' ;;
+      "Kernel version") printf 'Версия ядра' ;;
+      "Uptime") printf 'Время работы' ;;
+      "Load average") printf 'Средняя нагрузка' ;;
+      "CPU count") printf 'Количество CPU' ;;
+      "RAM usage") printf 'Использование RAM' ;;
+      "Swap usage") printf 'Использование swap' ;;
+      "Root disk usage") printf 'Использование корневого диска' ;;
+      "Default gateway") printf 'Шлюз по умолчанию' ;;
+      "DNS availability") printf 'Доступность DNS' ;;
+      "Internet access") printf 'Доступ в интернет' ;;
+      "Listening ports") printf 'Слушающие порты' ;;
+      "SSH listening port") printf 'Порт SSH' ;;
+      "Hostname resolution") printf 'Разрешение имени хоста' ;;
+      "SSH root login") printf 'Root-доступ по SSH' ;;
+      "SSH password authentication") printf 'Парольная аутентификация SSH' ;;
+      "SSH public key authentication") printf 'Аутентификация SSH по ключам' ;;
+      "SSH X11 forwarding") printf 'SSH X11 forwarding' ;;
+      "SSH TCP forwarding") printf 'SSH TCP forwarding' ;;
+      "UFW firewall") printf 'Фаервол UFW' ;;
+      "firewalld") printf 'firewalld' ;;
+      "Fail2ban") printf 'Fail2ban' ;;
+      "UID 0 users") printf 'Пользователи с UID 0' ;;
+      "/etc/passwd permissions") printf 'Права /etc/passwd' ;;
+      "/etc/shadow permissions") printf 'Права /etc/shadow' ;;
+      "Failed systemd units") printf 'Сбойные systemd units' ;;
+      "nginx service") printf 'Сервис nginx' ;;
+      "Docker service") printf 'Сервис Docker' ;;
+      "cron service") printf 'Сервис cron' ;;
+      "SSH service") printf 'Сервис SSH' ;;
+      "APT availability") printf 'Доступность APT' ;;
+      "Available package updates") printf 'Доступные обновления пакетов' ;;
+      "Reboot required") printf 'Требуется перезагрузка' ;;
+      "Docker installed") printf 'Docker установлен' ;;
+      "Docker daemon") printf 'Docker daemon' ;;
+      "Running containers") printf 'Запущенные контейнеры' ;;
+      "Stopped containers") printf 'Остановленные контейнеры' ;;
+      "Container restart policies") printf 'Политики перезапуска контейнеров' ;;
+      "nginx installed") printf 'nginx установлен' ;;
+      "nginx running") printf 'nginx запущен' ;;
+      "nginx configuration test") printf 'Проверка конфигурации nginx' ;;
+      "nginx sites-enabled") printf 'nginx sites-enabled' ;;
+      "nginx server_name directives") printf 'Директивы nginx server_name' ;;
+      "nginx HTTPS listeners") printf 'HTTPS listeners nginx' ;;
+      "Linux platform") printf 'Платформа Linux' ;;
+      *) printf '%s' "$title" ;;
+    esac
+  else
+    printf '%s' "$title"
+  fi
+}
+
+localize_text() {
+  local text="$1"
+  if [ "$LANG_CODE" = "ru" ]; then
+    case "$text" in
+      "No action required.") printf 'Действий не требуется.' ;;
+      "No action required if this is intentional.") printf 'Действий не требуется, если это сделано намеренно.' ;;
+      "OpsDoctor is Linux-only and this host is not Linux.") printf 'OpsDoctor работает только на Linux, а текущий хост не является Linux.' ;;
+      "Run OpsDoctor on a Linux server.") printf 'Запустите OpsDoctor на Linux-сервере.' ;;
+      "Install coreutils.") printf 'Установите coreutils.' ;;
+      "Ensure /proc is mounted.") printf 'Убедитесь, что /proc смонтирован.' ;;
+      "Install iproute2 for ss or net-tools for netstat.") printf 'Установите iproute2 для ss или net-tools для netstat.' ;;
+      "Install nginx if this host is expected to serve HTTP traffic.") printf 'Установите nginx, если этот хост должен обслуживать HTTP-трафик.' ;;
+      "Install Docker only if this host is expected to run containers.") printf 'Установите Docker только если этот хост должен запускать контейнеры.' ;;
+      "Package update checks are only supported on Debian/Ubuntu-like systems.") printf 'Проверка обновлений пакетов поддерживается для Debian/Ubuntu-подобных систем.' ;;
+      *) printf '%s' "$text" ;;
+    esac
+  else
+    printf '%s' "$text"
+  fi
+}
+
+usage() {
+  init_language
+  printf '%s - %s\n\n' "$OPSDOCTOR_NAME" "$(t usage_title)"
+  printf '%s:\n' "$(t usage_usage)"
+  cat <<EOF
+  opsdoctor check [--json] [--html FILE] [--no-color] [--lang LANG]
   opsdoctor version
+  opsdoctor languages
   opsdoctor help
 
-Commands:
-  check              Run one-shot Linux diagnostics (default command)
-  version            Print OpsDoctor version
-  help               Show this help
+$(t usage_commands):
+  check              $(t cmd_check)
+  version            $(t cmd_version)
+  languages          $(t cmd_languages)
+  help               $(t cmd_help)
 
-Options:
-  --json             Print a valid JSON report to stdout
-  --html FILE        Write a standalone HTML report to FILE
-  --no-color         Disable colored terminal output
+$(t usage_options):
+  --json             $(t opt_json)
+  --html FILE        $(t opt_html)
+  --no-color         $(t opt_no_color)
+  --lang LANG        $(t opt_lang)
 
-Examples:
+$(t usage_examples):
   opsdoctor check
   opsdoctor check --json
+  opsdoctor check --lang ru
   opsdoctor check --html report.html
 EOF
 }
@@ -125,15 +520,18 @@ add_check() {
 
   case "$status" in
     ok|warning|critical|skipped) ;;
-    *) status="skipped"; message="Invalid check status returned by $id"; fix="Report this as an OpsDoctor bug." ;;
+    *) status="skipped"; message="$(t invalid_status_message) $id"; fix="$(t report_bug_fix)" ;;
   esac
 
   CHECK_CATEGORIES+=("$category")
   CHECK_IDS+=("$id")
   CHECK_TITLES+=("$title")
   CHECK_STATUSES+=("$status")
-  CHECK_MESSAGES+=("$message")
-  CHECK_FIXES+=("$fix")
+  CHECK_MESSAGES+=("$(localize_text "$message")")
+  CHECK_FIXES+=("$(localize_text "$fix")")
+  CHECK_CATEGORY_LABELS+=("$(category_label "$category")")
+  CHECK_TITLE_LABELS+=("$(title_label "$title")")
+  CHECK_STATUS_LABELS+=("$(status_label "$status")")
 
   case "$status" in
     ok) COUNT_OK=$((COUNT_OK + 1)) ;;
@@ -1120,10 +1518,10 @@ status_color() {
 
 status_label() {
   case "$1" in
-    ok) printf 'OK' ;;
-    warning) printf 'WARNING' ;;
-    critical) printf 'CRITICAL' ;;
-    skipped) printf 'SKIPPED' ;;
+    ok) t ok ;;
+    warning) t warning ;;
+    critical) t critical ;;
+    skipped) t skipped ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -1134,24 +1532,24 @@ print_terminal_report() {
   local category i status color label
 
   printf '%s%s%s %s%s%s\n' "$COLOR_BOLD" "$OPSDOCTOR_NAME" "$COLOR_RESET" "$COLOR_DIM" "$OPSDOCTOR_VERSION" "$COLOR_RESET"
-  printf 'Host: %s | OS: %s | Kernel: %s\n' "$HOST_HOSTNAME" "$HOST_OS" "$HOST_KERNEL"
-  printf 'Timestamp: %s\n\n' "$REPORT_TIMESTAMP"
+  printf '%s: %s | %s: %s | %s: %s\n' "$(t host)" "$HOST_HOSTNAME" "$(t os)" "$HOST_OS" "$(t kernel)" "$HOST_KERNEL"
+  printf '%s: %s | %s: %s\n\n' "$(t timestamp)" "$REPORT_TIMESTAMP" "$(t lang_current)" "$LANG_CODE"
 
   for category in "${categories[@]}"; do
-    printf '%s%s%s\n' "$COLOR_BOLD" "$category" "$COLOR_RESET"
+    printf '%s%s%s\n' "$COLOR_BOLD" "$(category_label "$category")" "$COLOR_RESET"
     for i in "${!CHECK_IDS[@]}"; do
       [ "${CHECK_CATEGORIES[$i]}" = "$category" ] || continue
       status="${CHECK_STATUSES[$i]}"
       color="$(status_color "$status")"
-      label="$(status_label "$status")"
-      printf '  %s%-8s%s  %-34s %s\n' "$color" "$label" "$COLOR_RESET" "${CHECK_TITLES[$i]}" "${CHECK_MESSAGES[$i]}"
+      label="${CHECK_STATUS_LABELS[$i]}"
+      printf '  %s%-12s%s  %-34s %s\n' "$color" "$label" "$COLOR_RESET" "${CHECK_TITLE_LABELS[$i]}" "${CHECK_MESSAGES[$i]}"
     done
     printf '\n'
   done
 
-  printf '%sSummary%s\n' "$COLOR_BOLD" "$COLOR_RESET"
-  printf '  Score: %s%s%s/100\n' "$(status_color_from_score "$SCORE")" "$SCORE" "$COLOR_RESET"
-  printf '  OK: %s | Warning: %s | Critical: %s | Skipped: %s\n' "$COUNT_OK" "$COUNT_WARNING" "$COUNT_CRITICAL" "$COUNT_SKIPPED"
+  printf '%s%s%s\n' "$COLOR_BOLD" "$(t summary)" "$COLOR_RESET"
+  printf '  %s: %s%s%s/100\n' "$(t score)" "$(status_color_from_score "$SCORE")" "$SCORE" "$COLOR_RESET"
+  printf '  %s: %s | %s: %s | %s: %s | %s: %s\n' "$(t ok)" "$COUNT_OK" "$(t warnings)" "$COUNT_WARNING" "$(t criticals)" "$COUNT_CRITICAL" "$(t skipped)" "$COUNT_SKIPPED"
 }
 
 status_color_from_score() {
@@ -1170,6 +1568,7 @@ print_json_report() {
   printf '{\n'
   printf '  "tool": "%s",\n' "$(json_escape "$OPSDOCTOR_NAME")"
   printf '  "version": "%s",\n' "$(json_escape "$OPSDOCTOR_VERSION")"
+  printf '  "language": "%s",\n' "$(json_escape "$LANG_CODE")"
   printf '  "timestamp": "%s",\n' "$(json_escape "$REPORT_TIMESTAMP")"
   printf '  "host": {\n'
   printf '    "hostname": "%s",\n' "$(json_escape "$HOST_HOSTNAME")"
@@ -1191,8 +1590,11 @@ print_json_report() {
     printf '    {\n'
     printf '      "id": "%s",\n' "$(json_escape "${CHECK_IDS[$i]}")"
     printf '      "category": "%s",\n' "$(json_escape "${CHECK_CATEGORIES[$i]}")"
+    printf '      "category_label": "%s",\n' "$(json_escape "${CHECK_CATEGORY_LABELS[$i]}")"
     printf '      "title": "%s",\n' "$(json_escape "${CHECK_TITLES[$i]}")"
+    printf '      "title_label": "%s",\n' "$(json_escape "${CHECK_TITLE_LABELS[$i]}")"
     printf '      "status": "%s",\n' "$(json_escape "${CHECK_STATUSES[$i]}")"
+    printf '      "status_label": "%s",\n' "$(json_escape "${CHECK_STATUS_LABELS[$i]}")"
     printf '      "message": "%s",\n' "$(json_escape "${CHECK_MESSAGES[$i]}")"
     printf '      "fix": "%s"\n' "$(json_escape "${CHECK_FIXES[$i]}")"
     printf '    }'
@@ -1205,7 +1607,7 @@ print_html_report() {
   local i status safe_title safe_message safe_fix safe_category
   cat <<EOF
 <!doctype html>
-<html lang="en">
+<html lang="$(html_escape "$LANG_CODE")">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1244,39 +1646,39 @@ print_html_report() {
     <header>
       <div>
         <h1>OpsDoctor Report</h1>
-        <div class="muted">$(html_escape "$HOST_HOSTNAME") · $(html_escape "$HOST_OS") · Kernel $(html_escape "$HOST_KERNEL")</div>
-        <div class="muted">Generated at $(html_escape "$REPORT_TIMESTAMP")</div>
+        <div class="muted">$(html_escape "$HOST_HOSTNAME") · $(html_escape "$HOST_OS") · $(html_escape "$(t kernel)") $(html_escape "$HOST_KERNEL")</div>
+        <div class="muted">$(html_escape "$(t generated_at)") $(html_escape "$REPORT_TIMESTAMP") · $(html_escape "$(t lang_current)") $(html_escape "$LANG_CODE")</div>
       </div>
-      <div class="score"><span class="muted">Score</span><strong>$SCORE</strong><span class="muted">out of 100</span></div>
+      <div class="score"><span class="muted">$(html_escape "$(t score)")</span><strong>$SCORE</strong><span class="muted">$(html_escape "$(t out_of_100)")</span></div>
     </header>
 
     <section class="cards">
-      <div class="card"><span>OK</span><strong>$COUNT_OK</strong></div>
-      <div class="card"><span>Warnings</span><strong>$COUNT_WARNING</strong></div>
-      <div class="card"><span>Critical</span><strong>$COUNT_CRITICAL</strong></div>
-      <div class="card"><span>Skipped</span><strong>$COUNT_SKIPPED</strong></div>
+      <div class="card"><span>$(html_escape "$(t ok)")</span><strong>$COUNT_OK</strong></div>
+      <div class="card"><span>$(html_escape "$(t warnings)")</span><strong>$COUNT_WARNING</strong></div>
+      <div class="card"><span>$(html_escape "$(t criticals)")</span><strong>$COUNT_CRITICAL</strong></div>
+      <div class="card"><span>$(html_escape "$(t skipped)")</span><strong>$COUNT_SKIPPED</strong></div>
     </section>
 
-    <h2>Checks</h2>
+    <h2>$(html_escape "$(t checks)")</h2>
     <table>
-      <thead><tr><th>Category</th><th>Status</th><th>Check</th><th>Message</th><th>Suggested fix</th></tr></thead>
+      <thead><tr><th>$(html_escape "$(t category)")</th><th>$(html_escape "$(t status)")</th><th>$(html_escape "$(t check)")</th><th>$(html_escape "$(t message)")</th><th>$(html_escape "$(t fix)")</th></tr></thead>
       <tbody>
 EOF
 
   for i in "${!CHECK_IDS[@]}"; do
     status="${CHECK_STATUSES[$i]}"
-    safe_category="$(html_escape "${CHECK_CATEGORIES[$i]}")"
-    safe_title="$(html_escape "${CHECK_TITLES[$i]}")"
+    safe_category="$(html_escape "${CHECK_CATEGORY_LABELS[$i]}")"
+    safe_title="$(html_escape "${CHECK_TITLE_LABELS[$i]}")"
     safe_message="$(html_escape "${CHECK_MESSAGES[$i]}")"
     safe_fix="$(html_escape "${CHECK_FIXES[$i]}")"
-    printf '        <tr><td>%s</td><td><span class="badge %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$safe_category" "$status" "$(status_label "$status")" "$safe_title" "$safe_message" "$safe_fix"
+    printf '        <tr><td>%s</td><td><span class="badge %s">%s</span></td><td>%s</td><td>%s</td><td>%s</td></tr>\n' "$safe_category" "$status" "$(html_escape "${CHECK_STATUS_LABELS[$i]}")" "$safe_title" "$safe_message" "$safe_fix"
   done
 
-  cat <<'EOF'
+  cat <<EOF
       </tbody>
     </table>
 
-    <h2>Suggested fixes</h2>
+    <h2>$(html_escape "$(t suggested_fixes)")</h2>
     <section class="fixes">
 EOF
 
@@ -1285,13 +1687,13 @@ EOF
     status="${CHECK_STATUSES[$i]}"
     if [ "$status" = "warning" ] || [ "$status" = "critical" ]; then
       emitted=1
-      safe_title="$(html_escape "${CHECK_TITLES[$i]}")"
+      safe_title="$(html_escape "${CHECK_TITLE_LABELS[$i]}")"
       safe_fix="$(html_escape "${CHECK_FIXES[$i]}")"
       printf '      <div class="fix"><strong>%s</strong><br><span class="muted">%s</span></div>\n' "$safe_title" "$safe_fix"
     fi
   done
   if [ "$emitted" -eq 0 ]; then
-    printf '      <div class="fix"><strong>No immediate fixes</strong><br><span class="muted">All checks are OK or skipped.</span></div>\n'
+    printf '      <div class="fix"><strong>%s</strong><br><span class="muted">%s</span></div>\n' "$(html_escape "$(t no_immediate_fixes)")" "$(html_escape "$(t all_checks_ok_or_skipped)")"
   fi
 
   cat <<'EOF'
@@ -1314,6 +1716,23 @@ write_html_report() {
   fi
 }
 
+print_languages() {
+  init_language
+  local system_lang code marker
+  system_lang="$(system_language)"
+  printf '%s\n' "$(t lang_title)"
+  printf '  %s: %s (%s)\n' "$(t lang_current)" "$LANG_CODE" "$(lang_name "$LANG_CODE")"
+  printf '  %s: %s (%s)\n\n' "$(t lang_system)" "$system_lang" "$(lang_name "$system_lang")"
+  for code in $SUPPORTED_LANGUAGES; do
+    if language_is_installed "$code"; then
+      marker="$(t lang_installed)"
+    else
+      marker="$(t lang_not_installed)"
+    fi
+    printf '  %-3s  %-22s  %s\n' "$code" "$(lang_name "$code")" "$marker"
+  done
+}
+
 run_check_command() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1331,6 +1750,14 @@ run_check_command() {
       --no-color)
         USE_COLOR=0
         ;;
+      --lang)
+        shift
+        if [ "$#" -eq 0 ]; then
+          printf 'Error: --lang requires a language code.\n' >&2
+          return 1
+        fi
+        LANG_REQUESTED="$1"
+        ;;
       -h|--help)
         usage
         return 0
@@ -1344,6 +1771,7 @@ run_check_command() {
     shift
   done
 
+  init_language
   run_all_checks
 
   if [ -n "$HTML_OUTPUT_FILE" ]; then
@@ -1355,7 +1783,7 @@ run_check_command() {
   else
     print_terminal_report
     if [ -n "$HTML_OUTPUT_FILE" ]; then
-      printf '\nHTML report written to %s\n' "$HTML_OUTPUT_FILE"
+      printf '\n%s %s\n' "$(t html_written)" "$HTML_OUTPUT_FILE"
     fi
   fi
 }
@@ -1364,7 +1792,7 @@ main() {
   local command_name="${1:-check}"
   if [ "$#" -gt 0 ]; then
     case "$command_name" in
-      --json|--html|--no-color)
+      --json|--html|--no-color|--lang)
         command_name="check"
         ;;
       *)
@@ -1378,7 +1806,11 @@ main() {
       run_check_command "$@"
       ;;
     version)
+      init_language
       printf '%s %s\n' "$OPSDOCTOR_NAME" "$OPSDOCTOR_VERSION"
+      ;;
+    languages)
+      print_languages
       ;;
     help|-h|--help)
       usage

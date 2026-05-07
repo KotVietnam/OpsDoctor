@@ -20,12 +20,27 @@ require_systemd() {
 }
 
 main() {
-  require_root
-  require_systemd
-
   local dir
   dir="$(project_dir)"
+  # shellcheck disable=SC1091
+  . "$dir/lib/opsdoctor-install-deps.sh"
+  # shellcheck disable=SC1091
+  . "$dir/lib/opsdoctor-install-i18n.sh"
+  parse_dependency_args "$@"
+  parse_language_args "$@"
+  if [ "$INSTALL_LIST_LANGUAGES" -eq 1 ]; then
+    configure_language
+  fi
+  if [ "$OPSDOCTOR_CHECK_DEPS_ONLY" -eq 1 ]; then
+    print_dependency_report agent
+    exit 0
+  fi
 
+  require_root
+
+  ensure_dependencies agent
+  require_systemd
+  configure_language
   install -m 0755 "$dir/cli/opsdoctor.sh" /usr/local/bin/opsdoctor
   install -m 0755 "$dir/agent/opsdoctor-agent.sh" /usr/local/bin/opsdoctor-agent
   install -m 0644 "$dir/systemd/opsdoctor-agent.service" /etc/systemd/system/opsdoctor-agent.service
