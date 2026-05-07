@@ -1,0 +1,9 @@
+[Unit]
+Description=OpsDoctor one-shot diagnostics collection
+Documentation=https://github.com/opsdoctor/opsdoctor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/opsdoctor-agent run

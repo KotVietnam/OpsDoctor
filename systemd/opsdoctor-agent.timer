@@ -1,0 +1,12 @@
+[Unit]
+Description=Run OpsDoctor diagnostics every 5 minutes
+Documentation=https://github.com/opsdoctor/opsdoctor
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=opsdoctor-agent.service
+
+[Install]
+WantedBy=timers.target

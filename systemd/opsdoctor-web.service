@@ -1,0 +1,17 @@
+[Unit]
+Description=OpsDoctor web dashboard
+Documentation=https://github.com/opsdoctor/opsdoctor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/opsdoctor-web
+Restart=on-failure
+RestartSec=5s
+Environment=OPSDOCTOR_WEB_PORT=7357
+Environment=OPSDOCTOR_DATA_FILE=/var/lib/opsdoctor/latest.json
+User=root
+
+[Install]
+WantedBy=multi-user.target

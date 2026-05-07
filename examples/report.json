@@ -1,0 +1,43 @@
+{
+  "tool": "OpsDoctor",
+  "version": "0.1.0",
+  "timestamp": "2026-05-07T17:00:00+05:00",
+  "host": {
+    "hostname": "server01",
+    "os": "Debian GNU/Linux 12 (bookworm)",
+    "kernel": "6.1.0-21-amd64"
+  },
+  "score": 74,
+  "summary": {
+    "ok": 18,
+    "warning": 6,
+    "critical": 1,
+    "skipped": 2
+  },
+  "checks": [
+    {
+      "id": "ssh_root_login",
+      "category": "Security",
+      "title": "SSH root login",
+      "status": "critical",
+      "message": "permitrootlogin is set to yes.",
+      "fix": "Set PermitRootLogin no in /etc/ssh/sshd_config and restart ssh."
+    },
+    {
+      "id": "system_root_disk_usage",
+      "category": "System",
+      "title": "Root disk usage",
+      "status": "warning",
+      "message": "Root filesystem usage is 84% (17G used, 3.2G available).",
+      "fix": "Clean old logs, packages, caches, or expand the root filesystem."
+    },
+    {
+      "id": "network_dns",
+      "category": "Network",
+      "title": "DNS availability",
+      "status": "ok",
+      "message": "DNS resolution works for debian.org.",
+      "fix": "No action required."
+    }
+  ]
+}

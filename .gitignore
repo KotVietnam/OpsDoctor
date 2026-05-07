@@ -1,0 +1,35 @@
+# Binaries
+opsdoctor
+opsdoctor-agent
+opsdoctor-web
+web/opsdoctor-web
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Logs and runtime data
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Coverage and test output
+coverage/
+*.cover
+coverage.out
+
+# Generated reports
+/report.json
+/report.html
+examples/generated-*.json
+examples/generated-*.html
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

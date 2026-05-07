@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpsDoctor Example Report</title>
+  <style>
+    :root { color-scheme: dark; --bg: #101316; --panel: #171b20; --text: #e8edf2; --muted: #9aa7b3; --border: #2d3742; --ok: #38c172; --warning: #f4c542; --critical: #ff5c5c; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    main { max-width: 1000px; margin: 0 auto; padding: 32px 18px 48px; }
+    h1 { margin: 0 0 8px; }
+    .muted { color: var(--muted); }
+    .cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }
+    .card { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 14px; }
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--border); background: var(--panel); border-radius: 8px; overflow: hidden; }
+    th, td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+    th { color: var(--muted); }
+    .badge { display: inline-block; min-width: 82px; padding: 4px 8px; border-radius: 999px; color: #101316; font-weight: 800; font-size: 12px; text-align: center; }
+    .ok { background: var(--ok); }
+    .warning { background: var(--warning); }
+    .critical { background: var(--critical); }
+    @media (max-width: 720px) { .cards { grid-template-columns: repeat(2, 1fr); } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>OpsDoctor Report</h1>
+    <p class="muted">server01 · Debian GNU/Linux 12 · Kernel 6.1.0-21-amd64</p>
+    <p class="muted">Generated at 2026-05-07T17:00:00+05:00 · Score 74/100</p>
+    <section class="cards">
+      <div class="card">OK<br><strong>18</strong></div>
+      <div class="card">Warnings<br><strong>6</strong></div>
+      <div class="card">Critical<br><strong>1</strong></div>
+      <div class="card">Skipped<br><strong>2</strong></div>
+    </section>
+    <table>
+      <thead><tr><th>Category</th><th>Status</th><th>Check</th><th>Message</th><th>Suggested fix</th></tr></thead>
+      <tbody>
+        <tr><td>Security</td><td><span class="badge critical">CRITICAL</span></td><td>SSH root login</td><td>PermitRootLogin is enabled.</td><td>Set PermitRootLogin no in /etc/ssh/sshd_config and restart ssh.</td></tr>
+        <tr><td>System</td><td><span class="badge warning">WARNING</span></td><td>Root disk usage</td><td>Root filesystem usage is 84%.</td><td>Clean old logs, packages, caches, or expand the root filesystem.</td></tr>
+        <tr><td>Network</td><td><span class="badge ok">OK</span></td><td>DNS availability</td><td>DNS resolution works for debian.org.</td><td>No action required.</td></tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>
