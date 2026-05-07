@@ -51,6 +51,9 @@ ping|iputils-ping|recommended|internet reachability checks
 pgrep|procps|recommended|process state checks
 curl|curl|recommended|OpsDoctor upstream update checks
 wget|wget|optional|OpsDoctor update check fallback when curl is unavailable
+docker|docker.io|optional|Docker checks and web inventory
+screen|screen|optional|screen session web inventory
+tmux|tmux|optional|tmux session web inventory
 netstat|net-tools|optional|listening port fallback when ss is unavailable
 EOF
 

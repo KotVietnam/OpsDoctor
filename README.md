@@ -19,6 +19,7 @@ OpsDoctor is designed for quick one-shot diagnostics, simple periodic server hea
 - Automatic language detection with installer-time language selection.
 - Localized dashboard and report labels for major world languages.
 - Self-update checks against the upstream OpsDoctor version endpoint.
+- Live web inventory tab for Docker containers, screen/tmux sessions, listening ports, and failed systemd units.
 - Linux-only checks for system, network, security, services, packages, Docker, and nginx.
 - Graceful degradation when optional commands are missing.
 - Unified check result format: `id`, `category`, `title`, `status`, `message`, `fix`.
@@ -285,16 +286,27 @@ Configuration is environment-based:
 ```text
 OPSDOCTOR_WEB_PORT=7357
 OPSDOCTOR_DATA_FILE=/var/lib/opsdoctor/latest.json
+OPSDOCTOR_CONFIG_FILE=/etc/opsdoctor/opsdoctor.conf
 ```
 
 Endpoints:
 
 ```text
-/             HTML dashboard
-/api/status   raw latest.json
-/health       health check
+/               HTML dashboard
+/api/status     raw latest.json
+/api/inventory  live Docker/screen/tmux/ports/systemd inventory
+/health         health check
 /static/style.css
 ```
+
+The dashboard has two tabs:
+
+```text
+Overview        latest OpsDoctor JSON report
+Live inventory  Docker containers, screen sessions, tmux sessions, listening ports, failed systemd units
+```
+
+Inventory collection is best-effort. Missing commands such as `docker`, `screen`, `tmux`, `ss`, or `systemctl` are shown as skipped in the web UI instead of breaking the dashboard.
 
 ## JSON Example
 
