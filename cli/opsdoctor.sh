@@ -4,6 +4,9 @@ set -u
 OPSDOCTOR_VERSION="0.1.0"
 OPSDOCTOR_NAME="OpsDoctor"
 OPSDOCTOR_CONFIG_FILE="${OPSDOCTOR_CONFIG_FILE:-/etc/opsdoctor/opsdoctor.conf}"
+OPSDOCTOR_UPDATE_VERSION_URL="${OPSDOCTOR_UPDATE_VERSION_URL:-https://raw.githubusercontent.com/KotVietnam/OpsDoctor/main/VERSION}"
+OPSDOCTOR_UPDATE_RELEASE_URL="${OPSDOCTOR_UPDATE_RELEASE_URL:-https://api.github.com/repos/KotVietnam/OpsDoctor/releases/latest}"
+OPSDOCTOR_UPDATE_TAGS_URL="${OPSDOCTOR_UPDATE_TAGS_URL:-https://api.github.com/repos/KotVietnam/OpsDoctor/tags}"
 SUPPORTED_LANGUAGES="en ru es zh hi ar pt fr de ja ko it tr pl uk id vi fa bn ur nl cs sv ro"
 INSTALLED_LANG_CACHE=""
 
@@ -204,6 +207,7 @@ t_en() {
     cmd_version) printf 'Print OpsDoctor version' ;;
     cmd_help) printf 'Show this help' ;;
     cmd_languages) printf 'Show supported languages and system locales' ;;
+    cmd_updates) printf 'Check whether a newer OpsDoctor version is available' ;;
     opt_json) printf 'Print a valid JSON report to stdout' ;;
     opt_html) printf 'Write a standalone HTML report to FILE' ;;
     opt_no_color) printf 'Disable colored terminal output' ;;
@@ -254,6 +258,7 @@ t_ru() {
     cmd_version) printf 'Показать версию OpsDoctor' ;;
     cmd_help) printf 'Показать эту справку' ;;
     cmd_languages) printf 'Показать поддерживаемые языки и локали системы' ;;
+    cmd_updates) printf 'Проверить, доступна ли новая версия OpsDoctor' ;;
     opt_json) printf 'Вывести валидный JSON-отчёт в stdout' ;;
     opt_html) printf 'Записать автономный HTML-отчёт в FILE' ;;
     opt_no_color) printf 'Отключить цветной вывод в терминале' ;;
@@ -340,6 +345,7 @@ category_label() {
       Packages) printf 'Пакеты' ;;
       Docker) printf 'Docker' ;;
       Nginx) printf 'Nginx' ;;
+      Updates) printf 'Обновления' ;;
       *) printf '%s' "$category" ;;
     esac
   else
@@ -397,6 +403,7 @@ title_label() {
       "nginx server_name directives") printf 'Директивы nginx server_name' ;;
       "nginx HTTPS listeners") printf 'HTTPS listeners nginx' ;;
       "Linux platform") printf 'Платформа Linux' ;;
+      "OpsDoctor update check") printf 'Проверка обновлений OpsDoctor' ;;
       *) printf '%s' "$title" ;;
     esac
   else
@@ -418,6 +425,10 @@ localize_text() {
       "Install nginx if this host is expected to serve HTTP traffic.") printf 'Установите nginx, если этот хост должен обслуживать HTTP-трафик.' ;;
       "Install Docker only if this host is expected to run containers.") printf 'Установите Docker только если этот хост должен запускать контейнеры.' ;;
       "Package update checks are only supported on Debian/Ubuntu-like systems.") printf 'Проверка обновлений пакетов поддерживается для Debian/Ubuntu-подобных систем.' ;;
+      "Neither curl nor wget is available, so OpsDoctor cannot check for its latest upstream version.") printf 'curl и wget отсутствуют, поэтому OpsDoctor не может проверить последнюю upstream-версию.' ;;
+      "Install curl or wget, then run opsdoctor updates.") printf 'Установите curl или wget, затем выполните opsdoctor updates.' ;;
+      "Could not determine the latest OpsDoctor version from GitHub.") printf 'Не удалось определить последнюю версию OpsDoctor через GitHub.' ;;
+      "Check network access to GitHub or set OPSDOCTOR_UPDATE_VERSION_URL to an internal VERSION endpoint.") printf 'Проверьте доступ к GitHub или задайте OPSDOCTOR_UPDATE_VERSION_URL на внутренний VERSION endpoint.' ;;
       *) printf '%s' "$text" ;;
     esac
   else
@@ -432,12 +443,14 @@ usage() {
   cat <<EOF
   opsdoctor check [--json] [--html FILE] [--no-color] [--lang LANG]
   opsdoctor version
+  opsdoctor updates [--json] [--no-color] [--lang LANG]
   opsdoctor languages
   opsdoctor help
 
 $(t usage_commands):
   check              $(t cmd_check)
   version            $(t cmd_version)
+  updates            $(t cmd_updates)
   languages          $(t cmd_languages)
   help               $(t cmd_help)
 
@@ -451,6 +464,7 @@ $(t usage_examples):
   opsdoctor check
   opsdoctor check --json
   opsdoctor check --lang ru
+  opsdoctor updates
   opsdoctor check --html report.html
 EOF
 }
@@ -1256,6 +1270,137 @@ check_packages_reboot_required() {
   fi
 }
 
+fetch_url() {
+  local url="$1"
+  local path=""
+  case "$url" in
+    file://*)
+      path="${url#file://}"
+      if [ -r "$path" ]; then
+        cat "$path"
+        return 0
+      fi
+      return 1
+      ;;
+    /*)
+      if [ -r "$url" ]; then
+        cat "$url"
+        return 0
+      fi
+      return 1
+      ;;
+  esac
+  if command_exists curl; then
+    curl -fsSL --max-time 8 "$url" 2>/dev/null
+    return $?
+  fi
+  if command_exists wget; then
+    wget -q -T 8 -O - "$url" 2>/dev/null
+    return $?
+  fi
+  return 127
+}
+
+clean_version() {
+  local version="${1:-}"
+  version="${version%%[[:space:]]*}"
+  version="${version#v}"
+  version="${version#V}"
+  version="${version%%-*}"
+  version="${version%%+*}"
+  printf '%s' "$version"
+}
+
+version_number_part() {
+  local value="${1:-0}"
+  value="${value%%[!0-9]*}"
+  [ -n "$value" ] || value=0
+  printf '%s' "$value"
+}
+
+version_gt() {
+  local left right l_major l_minor l_patch r_major r_minor r_patch
+  left="$(clean_version "$1")"
+  right="$(clean_version "$2")"
+
+  IFS=. read -r l_major l_minor l_patch _ <<< "$left"
+  IFS=. read -r r_major r_minor r_patch _ <<< "$right"
+  l_major="$(version_number_part "$l_major")"
+  l_minor="$(version_number_part "$l_minor")"
+  l_patch="$(version_number_part "$l_patch")"
+  r_major="$(version_number_part "$r_major")"
+  r_minor="$(version_number_part "$r_minor")"
+  r_patch="$(version_number_part "$r_patch")"
+
+  [ "$l_major" -gt "$r_major" ] && return 0
+  [ "$l_major" -lt "$r_major" ] && return 1
+  [ "$l_minor" -gt "$r_minor" ] && return 0
+  [ "$l_minor" -lt "$r_minor" ] && return 1
+  [ "$l_patch" -gt "$r_patch" ] && return 0
+  return 1
+}
+
+latest_opsdoctor_version() {
+  local body version
+
+  body="$(fetch_url "$OPSDOCTOR_UPDATE_VERSION_URL" 2>/dev/null || true)"
+  version="$(printf '%s\n' "$body" | sed -n 's/^[[:space:]]*[vV]\{0,1\}\([0-9][0-9.]*\).*/\1/p' | head -n 1)"
+  if [ -n "$version" ]; then
+    printf '%s' "$version"
+    return 0
+  fi
+
+  body="$(fetch_url "$OPSDOCTOR_UPDATE_RELEASE_URL" 2>/dev/null || true)"
+  version="$(printf '%s\n' "$body" | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"[vV]\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -n "$version" ]; then
+    printf '%s' "$(clean_version "$version")"
+    return 0
+  fi
+
+  body="$(fetch_url "$OPSDOCTOR_UPDATE_TAGS_URL" 2>/dev/null || true)"
+  version="$(printf '%s\n' "$body" | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"[vV]\{0,1\}\([^"]*\)".*/\1/p' | head -n 1)"
+  if [ -n "$version" ]; then
+    printf '%s' "$(clean_version "$version")"
+    return 0
+  fi
+
+  return 1
+}
+
+check_opsdoctor_update() {
+  local latest current message fix
+  current="$(clean_version "$OPSDOCTOR_VERSION")"
+
+  if ! command_exists curl && ! command_exists wget; then
+    add_check "Updates" "opsdoctor_update_check" "OpsDoctor update check" "skipped" "Neither curl nor wget is available, so OpsDoctor cannot check for its latest upstream version." "Install curl or wget, then run opsdoctor updates."
+    return
+  fi
+
+  latest="$(latest_opsdoctor_version 2>/dev/null || true)"
+  if [ -z "$latest" ]; then
+    add_check "Updates" "opsdoctor_update_check" "OpsDoctor update check" "skipped" "Could not determine the latest OpsDoctor version from GitHub." "Check network access to GitHub or set OPSDOCTOR_UPDATE_VERSION_URL to an internal VERSION endpoint."
+    return
+  fi
+
+  if version_gt "$latest" "$current"; then
+    if [ "$LANG_CODE" = "ru" ]; then
+      message="Доступна новая версия OpsDoctor: $latest (установлена $current)."
+      fix="Обновите репозиторий: git pull, затем переустановите нужные компоненты через install.sh/install-agent.sh/install-web.sh."
+    else
+      message="A newer OpsDoctor version is available: $latest (installed $current)."
+      fix="Update the repository with git pull, then rerun the relevant install.sh/install-agent.sh/install-web.sh script."
+    fi
+    add_check "Updates" "opsdoctor_update_check" "OpsDoctor update check" "warning" "$message" "$fix"
+  else
+    if [ "$LANG_CODE" = "ru" ]; then
+      message="OpsDoctor обновлён до актуальной версии $current."
+    else
+      message="OpsDoctor is up to date at version $current."
+    fi
+    add_check "Updates" "opsdoctor_update_check" "OpsDoctor update check" "ok" "$message" "No action required."
+  fi
+}
+
 docker_daemon_ready() {
   command_exists docker || return 1
   docker info >/dev/null 2>&1
@@ -1490,6 +1635,8 @@ run_all_checks() {
   check_packages_updates
   check_packages_reboot_required
 
+  check_opsdoctor_update
+
   check_docker_installed
   check_docker_daemon
   check_docker_running_count
@@ -1528,7 +1675,7 @@ status_label() {
 
 print_terminal_report() {
   init_colors
-  local categories=("System" "Network" "Security" "Services" "Packages" "Docker" "Nginx")
+  local categories=("System" "Network" "Security" "Services" "Packages" "Updates" "Docker" "Nginx")
   local category i status color label
 
   printf '%s%s%s %s%s%s\n' "$COLOR_BOLD" "$OPSDOCTOR_NAME" "$COLOR_RESET" "$COLOR_DIM" "$OPSDOCTOR_VERSION" "$COLOR_RESET"
@@ -1788,6 +1935,64 @@ run_check_command() {
   fi
 }
 
+print_updates_terminal_report() {
+  init_colors
+  local i status color
+  printf '%s%s%s %s%s%s\n' "$COLOR_BOLD" "$OPSDOCTOR_NAME" "$COLOR_RESET" "$COLOR_DIM" "$OPSDOCTOR_VERSION" "$COLOR_RESET"
+  printf '%s: %s | %s: %s\n\n' "$(t timestamp)" "$REPORT_TIMESTAMP" "$(t lang_current)" "$LANG_CODE"
+  printf '%s%s%s\n' "$COLOR_BOLD" "$(category_label "Updates")" "$COLOR_RESET"
+  for i in "${!CHECK_IDS[@]}"; do
+    status="${CHECK_STATUSES[$i]}"
+    color="$(status_color "$status")"
+    printf '  %s%-12s%s  %-34s %s\n' "$color" "${CHECK_STATUS_LABELS[$i]}" "$COLOR_RESET" "${CHECK_TITLE_LABELS[$i]}" "${CHECK_MESSAGES[$i]}"
+    if [ "$status" = "warning" ] || [ "$status" = "critical" ] || [ "$status" = "skipped" ]; then
+      printf '  %-12s  %-34s %s\n' "" "$(t fix)" "${CHECK_FIXES[$i]}"
+    fi
+  done
+}
+
+run_updates_command() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --json)
+        OUTPUT_MODE="json"
+        ;;
+      --no-color)
+        USE_COLOR=0
+        ;;
+      --lang)
+        shift
+        if [ "$#" -eq 0 ]; then
+          printf 'Error: --lang requires a language code.\n' >&2
+          return 1
+        fi
+        LANG_REQUESTED="$1"
+        ;;
+      -h|--help)
+        usage
+        return 0
+        ;;
+      *)
+        printf 'Error: unknown option: %s\n\n' "$1" >&2
+        usage >&2
+        return 1
+        ;;
+    esac
+    shift
+  done
+
+  init_language
+  collect_host_info
+  check_opsdoctor_update
+  calculate_score
+
+  if [ "$OUTPUT_MODE" = "json" ]; then
+    print_json_report
+  else
+    print_updates_terminal_report
+  fi
+}
+
 main() {
   local command_name="${1:-check}"
   if [ "$#" -gt 0 ]; then
@@ -1804,6 +2009,9 @@ main() {
   case "$command_name" in
     check)
       run_check_command "$@"
+      ;;
+    updates|update-check|check-updates)
+      run_updates_command "$@"
       ;;
     version)
       init_language

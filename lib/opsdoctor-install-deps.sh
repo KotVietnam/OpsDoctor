@@ -49,6 +49,8 @@ ip|iproute2|recommended|default gateway checks
 ss|iproute2|recommended|listening port checks
 ping|iputils-ping|recommended|internet reachability checks
 pgrep|procps|recommended|process state checks
+curl|curl|recommended|OpsDoctor upstream update checks
+wget|wget|optional|OpsDoctor update check fallback when curl is unavailable
 netstat|net-tools|optional|listening port fallback when ss is unavailable
 EOF
 

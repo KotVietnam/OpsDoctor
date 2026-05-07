@@ -18,6 +18,7 @@ OpsDoctor is designed for quick one-shot diagnostics, simple periodic server hea
 - Standalone HTML reports with embedded CSS.
 - Automatic language detection with installer-time language selection.
 - Localized dashboard and report labels for major world languages.
+- Self-update checks against the upstream OpsDoctor version endpoint.
 - Linux-only checks for system, network, security, services, packages, Docker, and nginx.
 - Graceful degradation when optional commands are missing.
 - Unified check result format: `id`, `category`, `title`, `status`, `message`, `fix`.
@@ -62,6 +63,7 @@ opsdoctor check
 opsdoctor check --json
 opsdoctor check --html report.html
 opsdoctor check --lang ru
+opsdoctor updates
 opsdoctor languages
 ```
 
@@ -97,6 +99,14 @@ Write a standalone HTML report:
 opsdoctor check --html report.html
 ```
 
+Check whether a newer OpsDoctor version is available:
+
+```bash
+opsdoctor updates
+opsdoctor updates --json
+opsdoctor updates --lang ru
+```
+
 Override language for one run:
 
 ```bash
@@ -110,6 +120,31 @@ Print version and help:
 opsdoctor version
 opsdoctor help
 opsdoctor languages
+```
+
+## OpsDoctor Update Checks
+
+OpsDoctor can check whether the installed CLI version is older than the upstream project version:
+
+```bash
+opsdoctor updates
+opsdoctor updates --json
+```
+
+The normal `opsdoctor check` diagnostics also include an `Updates` section. The check uses `curl` or `wget` if available and does not require `jq`.
+
+Default upstream sources:
+
+```text
+https://raw.githubusercontent.com/KotVietnam/OpsDoctor/main/VERSION
+https://api.github.com/repos/KotVietnam/OpsDoctor/releases/latest
+https://api.github.com/repos/KotVietnam/OpsDoctor/tags
+```
+
+For internal mirrors or air-gapped environments, override the endpoint:
+
+```bash
+OPSDOCTOR_UPDATE_VERSION_URL=https://example.internal/opsdoctor/VERSION opsdoctor updates
 ```
 
 ## Language Support
@@ -176,7 +211,7 @@ The default installer behavior is `--install-deps`: missing required and recomme
 Core packages checked by the installers include:
 
 ```text
-bash coreutils grep sed mawk findutils libc-bin hostname iproute2 iputils-ping procps
+bash coreutils grep sed mawk findutils libc-bin hostname iproute2 iputils-ping procps curl
 ```
 
 Agent installation additionally requires systemd:
